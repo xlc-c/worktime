@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WorkTime</title>
+<style>
+  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; width: 260px; margin: 12px; color:#1f2328; font-size:13px; }
+  .row { display:flex; justify-content:space-between; margin:6px 0; }
+  .ok { color:#1a7f37; } .bad { color:#cf222e; }
+  button { margin-top:8px; width:100%; padding:5px; border:1px solid #d0d7de; background:#f6f8fa; border-radius:6px; cursor:pointer; }
+</style>
+</head>
+<body>
+  <div class="row"><span>本地采集器</span><b id="status">检查中…</b></div>
+  <div class="row"><span>上次上报</span><span id="last">-</span></div>
+  <div class="row"><span>错误</span><span id="error">-</span></div>
+  <button id="options">打开设置</button>
+  <script src="popup.js"></script>
+</body>
+</html>

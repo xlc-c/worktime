@@ -1,0 +1,30 @@
+title: "[Idea] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        WorkTime is local-first: no cloud, no telemetry, no screenshots/keyboard hooks.
+        Ideas that keep data on-device are very welcome.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / workflow
+      description: Describe the real workflow and pain, not only the feature.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Idea
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Capture
+        - Timeline & review UI
+        - Auto-labeling / local LLM
+        - Reports / exports
+        - Permissions / deployment
+        - Docs / localization

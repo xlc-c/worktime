@@ -1,0 +1,36 @@
+# --- runtime / build output ---
+data/
+dist/
+build/
+vendor/
+runtime/
+models/
+llama/
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# --- local config & secrets ---
+config.json
+.env
+*.token
+
+# --- python ---
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# --- editors / OS ---
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# --- screenshots taken from real data (use docs/screenshots with simulated data) ---
+docs/review-ui*.png
+docs/review-ui-*.png

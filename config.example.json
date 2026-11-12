@@ -1,0 +1,67 @@
+﻿{
+  "data_dir": null,
+  "ingest_port": 18731,
+  "review_port": 18732,
+  "token": "REPLACE_ME",
+  "sample_interval_s": 2.0,
+  "heartbeat_s": 20.0,
+  "idle_threshold_s": 120,
+  "clipboard_poll_s": 1.0,
+  "clipboard_max_chars": 30000,
+  "clipboard_preview_chars": 240,
+  "clipboard_exclude_apps": [
+    "keepass",
+    "keepassxc",
+    "bitwarden",
+    "1password",
+    "lastpass",
+    "dashlane"
+  ],
+  "uia_interval_s": 6.0,
+  "uia_apps": ["excel", "outlook", "lync", "winword", "powerpnt", "notepad", "wps"],
+  "web_match_window_s": 20,
+  "absorb_s": 12,
+  "gap_fill_s": 5,
+  "glue_window_s": 300,
+  "cluster_threshold": 0.30,
+  "max_segment_minutes": 45,
+  "llm": {
+    "enabled": false,
+    "base_url": "http://127.0.0.1:8080",
+    "model": "qwen3-4b",
+    "timeout_s": 240,
+    "batch_clusters": 6,
+    "max_tokens": 900
+  },
+  "report": {
+    "xlsx": true,
+    "workday_hours": 8.0,
+    "min_segment_s": 15
+  },
+  "review_open_browser": true,
+  "capture": {
+    "window_titles": true,
+    "browser_titles": true,
+    "browser_urls": true,
+    "browser_page_text": true,
+    "focused_text": true,
+    "clipboard": true,
+    "clipboard_preview_chars": 240,
+    "idle": true
+  },
+  "display": {
+    "show_content_default": false,
+    "allow_content_toggle": true
+  },
+  "privacy": {
+    "retention_days": 30,
+    "store_raw_clipboard_days": 7,
+    "excluded_apps": [],
+    "excluded_domains": []
+  },
+  "policy": {
+    "preset": "standard",
+    "locked": false,
+    "note": ""
+  }
+}

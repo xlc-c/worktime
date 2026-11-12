@@ -1,0 +1,8 @@
+﻿blank_issues_enabled: false
+contact_links:
+  - name: Questions & ideas
+    url: https://github.com/xlc-c/worktime/discussions
+    about: Ask questions, share setups and feedback (no personal data please).
+  - name: Security report
+    url: https://github.com/xlc-c/worktime/security/advisories/new
+    about: Please report vulnerabilities privately.

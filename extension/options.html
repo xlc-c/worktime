@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WorkTime 扩展设置</title>
+<style>
+  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; margin: 24px; max-width: 560px; color: #1f2328; }
+  h1 { font-size: 18px; }
+  label { display:block; margin: 14px 0 4px; font-weight: 600; font-size: 13px; }
+  input[type=text], input[type=password], input[type=number], textarea { width:100%; box-sizing:border-box; padding:6px 8px; border:1px solid #d0d7de; border-radius:6px; font-size:13px; }
+  textarea { height: 90px; }
+  .hint { color:#57606a; font-size:12px; margin-top:6px; line-height:1.5; }
+  button { margin-top:16px; padding:6px 14px; border:1px solid #1a7f37; background:#1f883d; color:#fff; border-radius:6px; cursor:pointer; }
+  #msg { margin-top:10px; color:#1a7f37; font-size:13px; }
+  .check { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; margin-top:10px; }
+  .check input { width:16px; height:16px; accent-color:#4f46e5; }
+</style>
+</head>
+<body>
+  <h1>WorkTime 扩展设置</h1>
+  <p class="hint">
+    这个扩展只把“当前页面的标题、网址、可见文字、选中文字”发送到本机
+    <code>http://127.0.0.1</code> 的 WorkTime 采集器。不会上传到任何服务器，
+    也不会记录密码框内容。
+  </p>
+  <label>令牌（与 config.json 的 token 一致；留空表示不校验）</label>
+  <input id="token" type="password" autocomplete="off" placeholder="粘贴 setup-user 生成的令牌">
+  <label>本地端口</label>
+  <input id="port" type="number" min="1024" max="65535" step="1">
+  <label>不记录的网站（每行一个域名/关键字，可留空）</label>
+  <textarea id="denylist" placeholder="例如：&#10;bank.example.com&#10;webmail.example.com"></textarea>
+  <label class="check"><input id="sendTitle" type="checkbox"> 发送页面标题</label>
+  <label class="check"><input id="sendUrl" type="checkbox"> 发送页面 URL</label>
+  <label class="check"><input id="sendPageText" type="checkbox"> 发送页面可见文字</label>
+  <label class="check"><input id="sendSelection" type="checkbox"> 发送选中的文字</label>
+  <p class="hint">如果公司只允许记录浏览时长、不允许记录页面内容，可以关闭上面 3 项内容开关（标题/正文/选中）。</p>
+  <p class="hint">提示：Chrome 与 Edge 需要分别打开一次本页面填写同样的设置。</p>
+  <button id="save">保存</button>
+  <div id="msg"></div>
+  <script src="options.js"></script>
+</body>
+</html>

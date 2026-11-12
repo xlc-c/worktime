@@ -1,0 +1,19 @@
+title: "[Setup] "
+labels: ["show-and-tell"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Share your setup: Windows version, which apps/pages you track, which preset you use,
+        what worked and what didn’t. Screenshots must use generated/simulated data.
+  - type: textarea
+    id: setup
+    attributes:
+      label: My setup
+      description: Apps, preset, extension, LLM or not, review workflow.
+    validations:
+      required: true
+  - type: textarea
+    id: lessons
+    attributes:
+      label: Lessons / tips
