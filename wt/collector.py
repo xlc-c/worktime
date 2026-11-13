@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import os
 import signal
 import sys
 import threading
@@ -26,7 +27,8 @@ from .config import data_paths, load_config
 from .server import IngestServer
 from .store import Store
 from .uia_focus import FocusSampler
-from .util import clip_preview, hash_text, is_probably_sensitive, now_iso
+from .util import (clip_preview_safe, hash_text,
+                   is_probably_sensitive, now_iso)
 
 log = logging.getLogger("worktime.collector")
 
@@ -111,7 +113,11 @@ class Collector:
         if (fg["app"] or "").lower() in exclude or (fg["proc"] or "") in exclude:
             log.info("clipboard event skipped (excluded app %s)", fg["app"])
             return
-        preview = clip_preview(text, preview_chars)
+        preview, redacted = clip_preview_safe(text, preview_chars)
+        if redacted:
+            # Random-looking business data (card numbers, ids, tokens): keep the
+            # fact that something was copied, never the text itself.
+            log.info("clipboard preview redacted (high-entropy content)")
         self.store.insert_clip(
             now_iso(), digest, preview, fg["app"], fg["title"][:512], len(text)
         )
@@ -163,6 +169,11 @@ class Collector:
         clip_interval = float(self.cfg.get("clipboard_poll_s", 1.0))
         next_clip = 0.0
         last_stats = time.time()
+        last_beat = 0.0
+        paused = False
+        self.store.set_meta("collector.pid", str(os.getpid()))
+        self.store.set_meta("collector.started_at", now_iso())
+        self.store.set_meta("collector.paused", "0")
         log.info("collector started; data dir=%s; policy=%s", self.paths["data"],
                  (self.cfg.get("policy") or {}).get("preset", "standard"))
         if sys.stdout is not None:  # pythonw.exe has no console
@@ -178,7 +189,16 @@ class Collector:
                 fg = winapi.get_foreground()
                 idle = winapi.get_idle_seconds()
 
-                if self._is_excluded(fg):
+                # Pause switch from the review UI / tray icon (no IPC, one row in meta).
+                want_pause = self.store.pause_requested()
+                if want_pause != paused:
+                    paused = want_pause
+                    log.info("capture %s by user", "paused" if paused else "resumed")
+                    self._last_key = None
+
+                if paused:
+                    self._last_key = None
+                elif self._is_excluded(fg):
                     # Excluded app (e.g. banking, password manager): do not record.
                     self._last_key = None
                 elif idle >= idle_threshold:
@@ -195,8 +215,13 @@ class Collector:
                         self._write_raw(fg, idle)
 
                 if loop_start >= next_clip:
-                    self._clipboard_capture(fg)
+                    if not paused:
+                        self._clipboard_capture(fg)
                     next_clip = loop_start + clip_interval
+
+                if loop_start - last_beat >= 5:
+                    last_beat = loop_start
+                    self.store.set_meta("collector.last_sample", now_iso())
 
                 if time.time() - last_stats >= 300:
                     last_stats = time.time()
@@ -212,6 +237,11 @@ class Collector:
 
         log.info("shutting down")
         self.stop_event.set()
+        try:
+            self.store.set_meta("collector.pid", "")
+            self.store.set_meta("collector.last_sample", "")
+        except Exception:
+            pass
         if self.ingest is not None:
             self.ingest.stop()
         self.store.close()

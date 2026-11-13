@@ -1,4 +1,4 @@
-﻿{
+{
   "data_dir": null,
   "ingest_port": 18731,
   "review_port": 18732,
@@ -36,7 +36,9 @@
   "report": {
     "xlsx": true,
     "workday_hours": 8.0,
-    "min_segment_s": 15
+    "min_segment_s": 15,
+    "round_minutes": 6,
+    "currency": "CNY"
   },
   "review_open_browser": true,
   "capture": {
@@ -63,5 +65,22 @@
     "preset": "standard",
     "locked": false,
     "note": ""
+  },
+  "uia_max_chars": 300,
+  "sync": {
+    "enabled": false,
+    "folder": "",
+    "encrypt": true,
+    "device_id": "",
+    "device_name": "",
+    "channels": {
+      "times": true,
+      "matters": true,
+      "window_titles": false,
+      "urls": false,
+      "page_text": false,
+      "focused_text": false,
+      "clipboard": false
+    }
   }
 }

@@ -48,6 +48,8 @@ DEFAULTS: dict = {
         "xlsx": True,
         "workday_hours": 8.0,
         "min_segment_s": 15,
+        "round_minutes": 6,
+        "currency": "CNY",
     },
     "review_open_browser": True,
     "capture": {
@@ -75,6 +77,25 @@ DEFAULTS: dict = {
         "locked": False,
         "note": "",
     },
+    # Multi-device sync is opt-in, channel by channel. Nothing leaves the
+    # machine unless sync.enabled is true AND you run an export.
+    "sync": {
+        "enabled": False,
+        "folder": "",
+        "encrypt": True,
+        "device_id": "",
+        "device_name": "",
+        "channels": {
+            "times": True,
+            "matters": True,
+            "window_titles": False,
+            "urls": False,
+            "page_text": False,
+            "focused_text": False,
+            "clipboard": False,
+        },
+    },
+    "uia_max_chars": 300,
 }
 
 

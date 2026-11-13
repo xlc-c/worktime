@@ -1,0 +1,11 @@
+# Optional runtime dependencies.
+# The core collector only needs the Python standard library.
+#
+# - uiautomation: read the focused control's text (Excel cells, Outlook bodies).
+#   Without it, focused-text capture silently degrades to off.
+# - comtypes: required by uiautomation on Windows.
+# - openpyxl: XLSX report export (Markdown + CSV work without it).
+
+uiautomation>=2.0.18; sys_platform == "win32"
+comtypes>=1.2.0; sys_platform == "win32"
+openpyxl>=3.1.0

@@ -69,6 +69,13 @@ class IngestHandler(BaseHTTPRequestHandler):
 
         from .util import domain_of, now_iso
 
+        try:
+            if self.store.pause_requested():
+                self._json(200, {"ok": True, "stored": False, "reason": "capture paused"})
+                return
+        except Exception:
+            pass
+
         capture = self.cfg.get("capture", {})
         privacy = self.cfg.get("privacy", {})
         if not any(capture.get(k) for k in

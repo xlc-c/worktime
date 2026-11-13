@@ -8,10 +8,27 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from . import billing
 from .config import data_paths
 from .util import fmt_clock, fmt_duration, ts_to_dt
 
 log = logging.getLogger("worktime.report")
+
+
+def report_segments(store, cfg: dict, start: str, end: str,
+                    include_foreign: bool | None = None) -> tuple[list[dict], list[dict]]:
+    """Return (local segments, foreign segments) for a period.
+
+    Foreign days (imported from another device) are only included when sync is
+    enabled — the user opted into multi-machine reporting.
+    """
+    local = store.fetch_segments_between(start, end)
+    sync = cfg.get("sync") or {}
+    if include_foreign is None:
+        include_foreign = bool(sync.get("enabled"))
+    foreign = store.foreign_segments_between(start, end) if include_foreign else []
+    return local, foreign
+
 
 
 def period_range(date_str: str, period: str) -> tuple[str, str]:
@@ -31,12 +48,14 @@ def period_range(date_str: str, period: str) -> tuple[str, str]:
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
-def summarize_period(segments: list[dict], cfg: dict) -> dict:
+def summarize_period(segments: list[dict], cfg: dict,
+                     rates: dict[str, dict] | None = None) -> dict:
     if not segments:
         return {
             "active_s": 0.0, "days": 0, "avg_s": 0.0, "coverage": 0.0,
             "avg_conf": 0.0, "by_matter": [], "by_app": [], "by_task": [],
-            "by_day": [], "by_month": [],
+            "by_day": [], "by_month": [], "billable_s": 0.0,
+            "billable_hours": 0.0, "amount": 0.0, "currency": "CNY",
         }
     active = sum(s.get("duration_s", 0.0) for s in segments)
     dates = sorted({s["date"] for s in segments})
@@ -73,18 +92,41 @@ def summarize_period(segments: list[dict], cfg: dict) -> dict:
         for month, seconds in sorted(month_seconds.items())
     ]
     confs = [float(s.get("confidence") or 0) for s in segments if s.get("confidence")]
+    rates = rates or {}
+    round_minutes = int((cfg.get("report") or {}).get("round_minutes") or 0)
+    by_matter = []
+    billable_s = 0.0
+    billable_hours = 0.0
+    amount = 0.0
+    currency = str((cfg.get("report") or {}).get("currency") or "CNY")
+    for matter, seconds in matter_seconds.most_common():
+        entry = billing.effective_rate(matter, rates)
+        rate = float(entry.get("rate") or 0)
+        billable = bool(entry.get("billable", 1)) and rate > 0
+        hours = billing.round_hours(seconds / 3600.0, round_minutes) if billable else 0.0
+        if billable:
+            billable_s += seconds
+            billable_hours += hours
+            amount += hours * rate
+            currency = entry.get("currency") or currency
+        by_matter.append({
+            "matter": matter, "seconds": seconds,
+            "ratio": seconds / active if active else 0.0,
+            "tasks": [t for t, _ in matter_tasks[matter].most_common(4)],
+            "rate": rate, "billable": billable,
+            "hours": hours, "amount": round(hours * rate, 2) if billable else 0.0,
+        })
     return {
         "active_s": active,
         "days": len(dates),
         "avg_s": active / max(1, len(dates)),
         "coverage": active / (workday * max(1, len(dates))) if workday else 0.0,
         "avg_conf": sum(confs) / len(confs) if confs else 0.0,
-        "by_matter": [
-            {"matter": matter, "seconds": seconds,
-             "ratio": seconds / active if active else 0.0,
-             "tasks": [t for t, _ in matter_tasks[matter].most_common(4)]}
-            for matter, seconds in matter_seconds.most_common()
-        ],
+        "by_matter": by_matter,
+        "billable_s": billable_s,
+        "billable_hours": round(billable_hours, 2),
+        "amount": round(amount, 2),
+        "currency": currency,
         "by_app": [
             {"app": app, "seconds": seconds,
              "ratio": seconds / active if active else 0.0}
@@ -100,8 +142,9 @@ def summarize_period(segments: list[dict], cfg: dict) -> dict:
 
 
 def render_period_markdown(segments: list[dict], cfg: dict, period: str,
-                           start_date: str, end_date: str) -> str:
-    summary = summarize_period(segments, cfg)
+                           start_date: str, end_date: str,
+                           rates: dict[str, dict] | None = None) -> str:
+    summary = summarize_period(segments, cfg, rates)
     label = {"week": "周报", "month": "月报", "year": "年报"}.get(period, "日报")
     title = start_date if start_date == end_date else f"{start_date} ~ {end_date}"
     lines: list[str] = []
@@ -114,17 +157,36 @@ def render_period_markdown(segments: list[dict], cfg: dict, period: str,
         f"覆盖工作日 {summary['coverage'] * 100:.0f}%）"
     )
     lines.append(f"- **平均置信度**：{summary['avg_conf']:.2f}")
+    if summary.get("billable_hours"):
+        lines.append(
+            f"- **计费**：{summary['billable_hours']:.2f} 小时"
+            f"，合计 {summary['amount']:.2f} {summary['currency']}"
+        )
     lines.append("")
 
     lines.append("## 按事项")
     lines.append("")
-    lines.append("| 事项 | 用时 | 占比 | 主要任务 |")
-    lines.append("| --- | ---: | ---: | --- |")
+    billable = bool(summary.get("billable_hours"))
+    if billable:
+        lines.append("| 事项 | 用时 | 占比 | 工时(h) | 金额 | 主要任务 |")
+        lines.append("| --- | ---: | ---: | ---: | ---: | --- |")
+    else:
+        lines.append("| 事项 | 用时 | 占比 | 主要任务 |")
+        lines.append("| --- | ---: | ---: | --- |")
     for item in summary["by_matter"]:
-        lines.append(
-            f"| {item['matter']} | {fmt_duration(item['seconds'])} |"
-            f" {item['ratio'] * 100:.0f}% | {'；'.join(item['tasks'])} |"
-        )
+        if billable:
+            amount = f"{item['amount']:.2f}" if item.get("billable") else "—"
+            hours = f"{item['hours']:.2f}" if item.get("billable") else "—"
+            lines.append(
+                f"| {item['matter']} | {fmt_duration(item['seconds'])} |"
+                f" {item['ratio'] * 100:.0f}% | {hours} | {amount} |"
+                f" {'；'.join(item['tasks'])} |"
+            )
+        else:
+            lines.append(
+                f"| {item['matter']} | {fmt_duration(item['seconds'])} |"
+                f" {item['ratio'] * 100:.0f}% | {'；'.join(item['tasks'])} |"
+            )
     lines.append("")
 
     lines.append("## 按应用")
@@ -168,14 +230,17 @@ def render_period_markdown(segments: list[dict], cfg: dict, period: str,
     return "\n".join(lines)
 
 
-def write_period_report(store, cfg: dict, date: str, period: str) -> dict:
+def write_period_report(store, cfg: dict, date: str, period: str,
+                        include_foreign: bool | None = None) -> dict:
     start_date, end_date = period_range(date, period)
-    segments = store.fetch_segments_between(start_date, end_date)
+    local, foreign = report_segments(store, cfg, start_date, end_date, include_foreign)
+    segments = local + foreign
     if not segments:
         return {"period": period, "written": False, "reason": "no segments",
                 "start": start_date, "end": end_date}
     paths = data_paths(cfg)
-    markdown = render_period_markdown(segments, cfg, period, start_date, end_date)
+    rates = store.matter_rates()
+    markdown = render_period_markdown(segments, cfg, period, start_date, end_date, rates)
     label = period if period in ("week", "month", "year") else "day"
     out = paths["reports"] / f"{end_date}-{label}.md"
     out.write_text(markdown, encoding="utf-8")
@@ -183,7 +248,7 @@ def write_period_report(store, cfg: dict, date: str, period: str) -> dict:
     with open(csv_path, "w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.writer(fh)
         writer.writerow(["date", "start", "end", "minutes", "app", "task",
-                         "matter", "confidence", "title"])
+                         "matter", "confidence", "title", "device"])
         for seg in segments:
             writer.writerow([
                 seg["date"], seg["start_ts"], seg["end_ts"],
@@ -193,6 +258,7 @@ def write_period_report(store, cfg: dict, date: str, period: str) -> dict:
                 seg.get("final_matter") or seg.get("auto_matter") or "",
                 seg.get("confidence") or 0,
                 seg.get("title", ""),
+                seg.get("device_name") or "",
             ])
     return {
         "period": period,
@@ -201,6 +267,7 @@ def write_period_report(store, cfg: dict, date: str, period: str) -> dict:
         "end": end_date,
         "days": len({s["date"] for s in segments}),
         "active_s": sum(s.get("duration_s", 0) for s in segments),
+        "foreign_days": len({s["date"] for s in foreign}),
         "markdown": str(out),
         "csv": str(csv_path),
     }

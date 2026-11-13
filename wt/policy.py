@@ -75,6 +75,22 @@ PRESETS: dict[str, dict] = {
         "privacy": {"retention_days": 90, "store_raw_clipboard_days": 30},
         "display": {"show_content_default": False, "allow_content_toggle": True},
     },
+    # Corporate-safe: window titles only, no browser extension, no UI text,
+    # no clipboard. Passes DLP review where content capture is not allowed.
+    "enterprise": {
+        "capture": {
+            "window_titles": True,
+            "browser_titles": False,
+            "browser_urls": False,
+            "browser_page_text": False,
+            "focused_text": False,
+            "clipboard": False,
+            "clipboard_preview_chars": 0,
+            "idle": True,
+        },
+        "privacy": {"retention_days": 30, "store_raw_clipboard_days": 0},
+        "display": {"show_content_default": False, "allow_content_toggle": False},
+    },
 }
 
 SECTIONS = ("capture", "display", "privacy")

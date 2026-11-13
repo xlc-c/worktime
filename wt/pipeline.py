@@ -54,7 +54,12 @@ def process_date(store: Store, cfg: dict, date: str, use_llm: bool = True) -> di
             log.warning("LLM enabled but not reachable at %s; using deterministic labels",
                         candidate.base_url)
 
-    label_segments(segments, cfg, store.get_aliases(), client)
+    rules = store.list_rules(only_enabled=True)
+    label_segments(segments, cfg, store.get_aliases(), client, rules)
+
+    for rule_id, count in (cfg.get("_rule_hits") or {}).items():
+        if count:
+            store.mark_rule_hit(int(rule_id), int(count), now_iso())
 
     for seg in segments:
         if not seg.get("final_task"):
@@ -73,6 +78,7 @@ def process_date(store: Store, cfg: dict, date: str, use_llm: bool = True) -> di
         "active_s": round(active, 1),
         "matters": len(matters),
         "llm": client is not None,
+        "rules_hit": sum(int(v) for v in (cfg.get("_rule_hits") or {}).values()),
     }
     log.info("processed %s: %s", date, result)
     return result

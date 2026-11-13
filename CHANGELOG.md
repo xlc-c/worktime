@@ -1,5 +1,54 @@
 # Changelog
 
+## v0.2.0 — 2026-11-13
+
+Focus: make the timeline trustworthy without a babysitter — rules instead of
+hand-dragging, sync you control channel by channel, billing, and a visible
+collector.
+
+### Added
+
+- **Automatic rules** (`wt/rules.py`, `wt rules …`): deterministic
+  “app/title/domain/focused-text → matter” mapping with `contains` / `=exact` /
+  `re:` regex, priorities, hit counters and a dry-run test command. Rules run
+  before clustering; manual labels and learned aliases still win. UI: 设置 → 自动规则,
+  plus 「存为规则」 in the segment drawer.
+- **Opt-in multi-device sync** (`wt/sync.py`, `wt/crypto.py`, `wt sync …`):
+  bundle export/import through a folder you choose (OneDrive, NAS, USB), with
+  **per-channel manual switches** (times / matters / window titles / URLs /
+  page text / focused text / clipboard). Imported days live in `foreign_days`,
+  never mixed into local segments, and are idempotent per device+day. Optional
+  passphrase encryption (ChaCha20 + HMAC-SHA256, scrypt or PBKDF2 KDF).
+- **Billing** (`wt/billing.py`, `wt matter …`, `wt invoice`): per-matter hourly
+  rates with parent inheritance (`Client / Project / Sub-task`), billable flag,
+  configurable rounding, Markdown + CSV invoices, and amount columns in period
+  reports.
+- **Live collector status**: heartbeat in the DB, `/api/live`, a status pill and
+  a pause/resume button in the review UI, auto-refresh of today's timeline, and
+  `scripts/worktime-tray.ps1` (Windows tray icon with the same controls).
+- **`enterprise` capture preset**: window titles + idle only — no extension, no
+  focused text, no clipboard — for DLP-restricted machines.
+- Report weekly/monthly/yearly views can include other devices' imported days
+  when sync is enabled.
+
+### Changed
+
+- Clipboard previews for high-entropy content (card numbers, tokens, long random
+  strings) are dropped and only hash + length are stored; secrets are still
+  skipped entirely.
+- Focused-text capture now skips password controls (`IsPassword`) and excluded
+  apps, and truncates to `uia_max_chars` (default 300).
+- Reports carry a `device` column and billable totals when rates exist.
+- `requirements.txt` added (uiautomation / comtypes / openpyxl).
+
+### Fixed
+
+- README test badge and roadmap listed already-shipped features as planned and
+  undercounted tests (now 64).
+- Release notes referenced `WorkTime.zip` while the asset is
+  `WorkTime-v0.1.0.zip`.
+- `wt/__init__.py` version now matches the release.
+
 ## v0.1.0 — 2026-11-12
 
 First public prototype.

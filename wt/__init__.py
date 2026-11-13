@@ -8,4 +8,4 @@ No network access leaves the machine: everything binds to 127.0.0.1 and
 the database lives under the project's data directory.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

@@ -20,6 +20,7 @@ import re
 from collections import Counter, defaultdict
 
 from .llm import LlmClient, extract_json
+from .rules import apply_rules
 from .util import domain_of, normalize_title
 
 log = logging.getLogger("worktime.classify")
@@ -319,9 +320,16 @@ def _apply_alias(segment: dict, aliases: list[dict]) -> tuple[str, str] | None:
 
 
 def label_segments(segments: list[dict], cfg: dict, aliases: list[dict],
-                   client: LlmClient | None) -> list[dict]:
+                   client: LlmClient | None, rules: list[dict] | None = None) -> list[dict]:
     if not segments:
         return segments
+
+    # 0. explicit user rules: deterministic and re-applied on every reprocess.
+    cfg.pop("_rule_hits", None)
+    rule_hits = apply_rules(segments, rules or [])
+    if rule_hits:
+        cfg["_rule_hits"] = rule_hits
+    ruled = [i for i, seg in enumerate(segments) if seg.get("rule_name")]
 
     # 1. clipboard links are strong evidence of "same task"
     forced: dict[str, list[int]] = {}
@@ -332,10 +340,19 @@ def label_segments(segments: list[dict], cfg: dict, aliases: list[dict],
 
     # 2. aliases from previous reviews win immediately
     labels: dict[int, tuple[str, str, float]] = {}
+    for idx in ruled:
+        labels[idx] = (
+            segments[idx].get("auto_task") or "",
+            segments[idx].get("auto_matter") or "未归类",
+            0.95,
+        )
     for idx, seg in enumerate(segments):
         hit = _apply_alias(seg, aliases)
         if hit:
             labels[idx] = (hit[0], hit[1], 0.99)
+            if seg.get("rule_name"):
+                # a learned alias is more recent than the rule: no longer "rule hit"
+                seg["rule_name"] = ""
 
     vectors = _tfidf(segments)
     sim = _similarity_matrix(vectors)

@@ -30,7 +30,7 @@ from . import pipeline
 from .config import config_path, data_paths, load_config
 from .policy import PRESETS, summarize
 from .report import (period_range, render_markdown, render_period_markdown,
-                     summarize_period, write_report)
+                     report_segments, summarize_period, write_report)
 from .store import Store
 from .util import domain_of, now_iso, normalize_title, today_str
 
@@ -114,12 +114,59 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 "date": date,
                 "segments": self.store.list_segments(date),
                 "aliases": self.store.get_aliases(),
+                "rules": self.store.list_rules(),
+                "matters": self.store.list_matters(),
                 "dates": self.store.list_dates(31),
                 "policy": summarize(self.cfg),
+                "live": self.store.live_state(),
+                "foreign_days": self.store.foreign_day_count(),
             })
+            return
+        if parsed.path == "/api/live":
+            from .util import today_str
+
+            state = self.store.live_state()
+            today = today_str()
+            state["today_segments"] = len(self.store.list_segments(today))
+            state["today_date"] = today
+            state["paused"] = self.store.pause_requested()
+            self._json(200, state)
             return
         if parsed.path == "/api/settings":
             self._json(200, self._settings_payload())
+            return
+        if parsed.path == "/api/rules":
+            self._json(200, {"rules": self.store.list_rules()})
+            return
+        if parsed.path == "/api/sync/status":
+            from .sync import status as sync_status
+
+            self._json(200, sync_status(self.store, self.cfg))
+            return
+        if parsed.path == "/api/sync/preview":
+            from .sync import preview as sync_preview
+
+            days = int((query.get("days") or ["7"])[0])
+            self._json(200, sync_preview(self.store, self.cfg, days=days))
+            return
+        if parsed.path == "/api/invoice":
+            from .billing import build_invoice
+            from .report import period_range
+
+            date = (query.get("date") or [self.default_date])[0]
+            period = (query.get("period") or ["month"])[0]
+            start, end = period_range(date, period)
+            segments = self.store.fetch_segments_between(start, end)
+            invoice = build_invoice(
+                segments, self.store.matter_rates(),
+                currency=str((self.cfg.get("report") or {}).get("currency") or "CNY"),
+                round_minutes=int((self.cfg.get("report") or {}).get("round_minutes") or 0),
+            )
+            self._json(200, {"start": start, "end": end, "period": period,
+                             **invoice})
+            return
+        if parsed.path == "/api/matters":
+            self._json(200, {"matters": self.store.list_matters()})
             return
         if parsed.path == "/api/detail":
             seg_id = int((query.get("segment") or ["0"])[0])
@@ -128,15 +175,18 @@ class ReviewHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/report":
             date = (query.get("date") or [self.default_date])[0]
             period = (query.get("period") or ["day"])[0]
+            rates = self.store.matter_rates()
             if period == "day":
                 start = end = date
                 segments = self.store.list_segments(date)
                 markdown = render_markdown(date, segments, self.cfg)
             else:
                 start, end = period_range(date, period)
-                segments = self.store.fetch_segments_between(start, end)
-                markdown = render_period_markdown(segments, self.cfg, period, start, end)
-            summary = summarize_period(segments, self.cfg)
+                local, foreign = report_segments(self.store, self.cfg, start, end)
+                segments = local + foreign
+                markdown = render_period_markdown(segments, self.cfg, period,
+                                                  start, end, rates)
+            summary = summarize_period(segments, self.cfg, rates)
             self._json(200, {
                 "date": date, "period": period, "start": start, "end": end,
                 "markdown": markdown,
@@ -144,6 +194,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     key: summary[key] for key in (
                         "active_s", "days", "avg_s", "coverage", "avg_conf",
                         "by_matter", "by_app", "by_task", "by_day", "by_month",
+                        "billable_s", "billable_hours", "amount", "currency",
                     )
                 },
             })
@@ -172,6 +223,27 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 self._merge(body)
             elif path == "/api/process":
                 self._process(body)
+            elif path == "/api/collector/pause":
+                self.store.set_meta("collector.paused", "1" if body.get("paused") else "0")
+                self._json(200, {"ok": True, "paused": self.store.pause_requested(),
+                                 "live": self.store.live_state()})
+            elif path == "/api/rules":
+                self._rule_save(body)
+            elif path == "/api/rules/delete":
+                self.store.delete_rule(int(body.get("id") or 0))
+                self._json(200, {"ok": True, "rules": self.store.list_rules()})
+            elif path == "/api/rules/preview":
+                self._rule_preview(body)
+            elif path == "/api/rules/suggest":
+                self._rule_suggest(body)
+            elif path == "/api/matters":
+                self._matter_save(body)
+            elif path == "/api/sync/push":
+                self._sync_push(body)
+            elif path == "/api/sync/pull":
+                self._sync_pull(body)
+            elif path == "/api/invoice":
+                self._invoice_write(body)
             else:
                 self._json(404, {"ok": False, "error": "not found"})
         except ValueError as exc:
@@ -299,6 +371,78 @@ class ReviewHandler(BaseHTTPRequestHandler):
         write_report(self.store, self.cfg, date)
         self._json(200, {"ok": True, **result})
 
+    # -- rules ---------------------------------------------------------
+    def _rule_save(self, body: dict) -> None:
+        rule = self.store.upsert_rule(body)
+        self._json(200, {"ok": True, "rule": rule, "rules": self.store.list_rules()})
+
+    def _rule_preview(self, body: dict) -> None:
+        from .rules import preview_rule
+
+        date = str(body.get("date") or self.default_date)
+        segments = self.store.list_segments(date)
+        self._json(200, {"ok": True, "date": date,
+                         **preview_rule(body, segments)})
+
+    def _rule_suggest(self, body: dict) -> None:
+        from .rules import suggest_rule
+
+        seg = self.store.get_segment(int(body.get("id") or 0))
+        if not seg:
+            self._json(404, {"ok": False, "error": "segment not found"})
+            return
+        matter = str(body.get("matter") or seg.get("final_matter") or "")
+        task = str(body.get("task") or seg.get("final_task") or "")
+        self._json(200, {"ok": True,
+                         "rule": suggest_rule(seg, matter=matter, task=task)})
+
+    # -- matters / billing --------------------------------------------
+    def _matter_save(self, body: dict) -> None:
+        path = str(body.get("path") or "").strip()
+        if not path:
+            self._json(400, {"ok": False, "error": "path required"})
+            return
+        rate = body.get("rate")
+        billable = body.get("billable")
+        self.store.upsert_matter(
+            path,
+            rate=float(rate) if rate not in (None, "") else None,
+            currency=str(body.get("currency") or "CNY"),
+            billable=bool(billable) if billable is not None else None,
+            note=str(body.get("note") or ""),
+        )
+        self._json(200, {"ok": True, "matters": self.store.list_matters()})
+
+    def _invoice_write(self, body: dict) -> None:
+        from .billing import write_invoice
+
+        date = str(body.get("date") or self.default_date)
+        period = str(body.get("period") or "month")
+        out = write_invoice(self.store, self.cfg, date, period)
+        self._json(200, {"ok": bool(out.get("written")), **out})
+
+    # -- sync ----------------------------------------------------------
+    def _passphrase(self, body: dict) -> str:
+        import os
+
+        return str(body.get("passphrase") or "").strip() or \
+            os.environ.get("WT_SYNC_PASSPHRASE", "")
+
+    def _sync_push(self, body: dict) -> None:
+        from .sync import push_folder
+
+        days = int(body.get("days") or 7)
+        out = push_folder(self.store, self.cfg, days=days,
+                          passphrase=self._passphrase(body) or None)
+        self._json(200, {"ok": True, **out})
+
+    def _sync_pull(self, body: dict) -> None:
+        from .sync import pull_folder
+
+        out = pull_folder(self.store, self.cfg,
+                          passphrase=self._passphrase(body) or None)
+        self._json(200, {"ok": True, **out})
+
     # -- capture policy / permissions ---------------------------------
     def _settings_payload(self) -> dict:
         return {
@@ -306,11 +450,14 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 "capture": self.cfg.get("capture", {}),
                 "display": self.cfg.get("display", {}),
                 "privacy": self.cfg.get("privacy", {}),
+                "sync": self.cfg.get("sync", {}),
             },
             "policy": summarize(self.cfg),
             "presets": (self.cfg.get("_policy") or {}).get(
                 "presets", ["strict", "metadata", "standard", "full"]),
             "config_path": self.cfg.get("_config_path"),
+            "rules": self.store.list_rules(),
+            "matters": self.store.list_matters(),
         }
 
     def _settings(self, body: dict) -> None:
@@ -340,7 +487,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                         k: v for k, v in (disk.get(section) or {}).items()
                         if k not in owned
                     }
-        for section in ("capture", "display", "privacy"):
+        for section in ("capture", "display", "privacy", "sync"):
             incoming = body.get(section)
             if isinstance(incoming, dict):
                 target = disk.setdefault(section, {})

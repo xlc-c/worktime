@@ -34,6 +34,8 @@
     date: '', segments: [], selected: new Set(), showContent: false,
     zoom: 1, undo: [], drawerId: null, detail: null, interrupts: new Map(),
     dates: [], policy: null,
+    live: null, settingsTab: 'capture', settingsData: null,
+    rules: [], matters: [], pendingRule: null, autoRefreshTimer: null,
   };
   let layout = { minStart: 0, ppm: 1.5 };
   let drag = null;
@@ -131,6 +133,10 @@
     state.segments = data.segments || [];
     state.dates = data.dates || [];
     state.policy = data.policy || null;
+    if (data.live !== undefined) {
+      state.live = data.live;
+      renderLive();
+    }
     state.interrupts = computeInterrupts();
     state.selected.clear();
     applyDisplayPolicy();
@@ -816,6 +822,7 @@
       + esc(matterOf(s)) + '"></div>'
       + '<div class="actions"><button id="dSave" class="btn primary">保存标签</button>'
       + '<button id="dParent" class="btn ghost">设置上级</button>'
+      + '<button id="dRule" class="btn ghost" title="把这段的标题/域名变成自动归类规则">存为规则</button>'
       + (next ? '<button id="dMerge" class="btn ghost">与下一段合并</button>' : '')
       + '</div>'
       + banner
@@ -840,6 +847,21 @@
       const rest = parts.length > 1 ? parts.slice(1) : parts;
       const next = [parent.trim()].concat(rest).join(' / ');
       applyLabel([s.id], null, next, '已设置层级：' + next);
+    };
+    $('#dRule').onclick = async () => {
+      const res = await fetch('/api/rules/suggest', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: s.id,
+          matter: $('#dMatter').value.trim() || matterOf(s),
+          task: $('#dTask').value.trim() || taskOf(s),
+        }),
+      });
+      const out = await res.json();
+      if (!out.ok) { toast('无法生成规则'); return; }
+      state.pendingRule = out.rule;
+      await openSettings('rules');
+      toast('已填入规则，确认后点「添加规则」');
     };
     const doSplit = async (value) => {
       const res = await fetch('/api/segment/split', {
@@ -1111,6 +1133,11 @@
     };
     $('#drawerClose').onclick = closeDrawer;
     $('#modalClose').onclick = () => $('#modal').classList.add('hidden');
+    $('#settingsTabs').addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-tab]');
+      if (btn) setSettingsTab(btn.dataset.tab);
+    });
+    $('#btnPause').onclick = togglePause;
 
     const lanes = $('#lanes');
     lanes.addEventListener('pointerdown', onPointerDown);
@@ -1343,6 +1370,7 @@
     metadata: ['仅元数据', '窗口标题 + URL；不存正文、焦点文本、剪贴板'],
     standard: ['标准', '标题 + URL + 网页正文 + 焦点文本 + 剪贴板预览'],
     full: ['完整', '同标准但预览更长、保留更久（个人使用）'],
+    enterprise: ['企业受限', '只记窗口标题与时长；不装扩展、不读输入框、不碰剪贴板'],
   };
 
   function applyDisplayPolicy() {
@@ -1365,14 +1393,39 @@
       + label + '</label>';
   }
 
-  async function openSettings() {
+  async function openSettings(tab) {
+    if (tab) state.settingsTab = tab;
     const res = await fetch('/api/settings');
     const data = await res.json();
     renderSettings(data);
     $('#settingsModal').classList.remove('hidden');
   }
 
+  function setSettingsTab(tab) {
+    state.settingsTab = tab;
+    document.querySelectorAll('#settingsTabs button').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.tab === tab);
+    });
+    const map = { capture: '#settingsBody', rules: '#rulesBody',
+                  sync: '#syncBody', billing: '#billingBody' };
+    Object.keys(map).forEach((key) => {
+      const el = $(map[key]);
+      if (el) el.classList.toggle('hidden', key !== tab);
+    });
+    $('#settingsSave').classList.toggle('hidden', tab !== 'capture');
+    if (tab === 'sync') refreshSyncStatus();
+  }
+
   function renderSettings(data) {
+    state.settingsData = data;
+    renderCapturePanel(data);
+    renderRulesPanel(data.rules || []);
+    renderSyncPanel((data.effective || {}).sync || {});
+    renderBillingPanel(data.matters || []);
+    setSettingsTab(state.settingsTab || 'capture');
+  }
+
+  function renderCapturePanel(data) {
     const eff = data.effective || {};
     const cap = eff.capture || {};
     const disp = eff.display || {};
@@ -1485,6 +1538,378 @@
     setTimeout(() => location.reload(), 900);
   }
 
+  // ---------- rules ----------
+  function renderRulesPanel(rules) {
+    state.rules = rules || [];
+    const rows = state.rules.map((rule) => {
+      const cond = [
+        rule.app ? 'app ' + rule.app : '',
+        rule.title ? 'title ' + rule.title : '',
+        rule.url_domain ? 'url ' + rule.url_domain : '',
+        rule.focused ? 'focus ' + rule.focused : '',
+      ].filter(Boolean).join(' · ') || '（无条件，不会命中）';
+      return '<tr>'
+        + '<td><input type="checkbox" data-rule-toggle="' + rule.id + '"'
+        + (rule.enabled ? ' checked' : '') + '></td>'
+        + '<td>' + esc(rule.priority) + '</td>'
+        + '<td>' + esc(rule.name) + '</td>'
+        + '<td class="mono">' + esc(cond) + '</td>'
+        + '<td>' + esc(rule.matter || '—') + '</td>'
+        + '<td>' + esc(rule.task || '—') + '</td>'
+        + '<td>' + Number(rule.matches || 0) + '</td>'
+        + '<td><button class="btn tiny" data-rule-del="' + rule.id + '">删</button></td>'
+        + '</tr>';
+    }).join('');
+    const pre = state.pendingRule || {};
+    $('#rulesBody').innerHTML =
+      '<div class="settings-group"><h4>自动规则</h4>'
+      + '<div class="hint">命中即归入事项，优先于自动聚类；你手动打的标签仍然优先。'
+      + '条件留空 = 任意，多个条件同时满足才命中。前缀 <code>re:</code> 正则，'
+      + '<code>=</code> 精确匹配。</div>'
+      + (state.rules.length
+        ? '<table class="rule-table"><thead><tr><th>开</th><th>优先级</th><th>名称</th>'
+          + '<th>条件</th><th>事项</th><th>任务</th><th>命中</th><th></th></tr></thead>'
+          + '<tbody>' + rows + '</tbody></table>'
+        : '<div class="hint">还没有规则。比如：<b>app = excel</b> → 事项「客户A / 对账」。</div>')
+      + '</div>'
+      + '<div class="settings-group"><h4>新增规则</h4>'
+      + '<div class="rule-form">'
+      + '<label>名称<input id="rule-name" value="' + esc(pre.name || '') + '" placeholder="对账类活动"></label>'
+      + '<label>应用<input id="rule-app" value="' + esc(pre.app || '') + '" placeholder="excel / chrome"></label>'
+      + '<label>标题<input id="rule-title" value="' + esc(pre.title || '') + '" placeholder="对账"></label>'
+      + '<label>网址/域名<input id="rule-domain" value="' + esc(pre.url_domain || '') + '" placeholder="example.com"></label>'
+      + '<label>焦点文本<input id="rule-focused" value="' + esc(pre.focused || '') + '" placeholder="可选"></label>'
+      + '<label>事项<input id="rule-matter" value="' + esc(pre.matter || '') + '" placeholder="客户A / 对账"></label>'
+      + '<label>任务<input id="rule-task" value="' + esc(pre.task || '') + '" placeholder="可留空"></label>'
+      + '<label>优先级<input id="rule-priority" type="number" value="'
+      + Number(pre.priority || 100) + '"></label>'
+      + '</div>'
+      + '<div class="actions"><button id="ruleAdd" class="btn primary">添加规则</button>'
+      + '<button id="ruleTest" class="btn ghost">测试命中</button>'
+      + '<span class="hint" id="ruleResult"></span></div></div>';
+
+    state.pendingRule = null;
+    $('#rulesBody').querySelectorAll('[data-rule-del]').forEach((btn) => {
+      btn.onclick = () => deleteRule(Number(btn.dataset.ruleDel));
+    });
+    $('#rulesBody').querySelectorAll('[data-rule-toggle]').forEach((box) => {
+      box.onchange = () => saveRule({
+        id: Number(box.dataset.ruleToggle), enabled: box.checked,
+      }, true);
+    });
+    $('#ruleAdd').onclick = () => {
+      const rule = ruleFromForm();
+      if (!rule.app && !rule.title && !rule.url_domain && !rule.focused) {
+        toast('至少填一个匹配条件'); return;
+      }
+      saveRule(rule, false);
+    };
+    $('#ruleTest').onclick = async () => {
+      const res = await fetch('/api/rules/preview', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...ruleFromForm(), date: state.date }),
+      });
+      const out = await res.json();
+      if (!out.ok) { toast('预览失败'); return; }
+      $('#ruleResult').textContent = '命中 ' + out.count + ' 段 / '
+        + fmtDur(out.seconds || 0) + '（' + state.date + '）';
+    };
+  }
+
+  function ruleFromForm() {
+    return {
+      name: ($('#rule-name') || {}).value || '',
+      app: (($('#rule-app') || {}).value || '').trim(),
+      title: (($('#rule-title') || {}).value || '').trim(),
+      url_domain: (($('#rule-domain') || {}).value || '').trim(),
+      focused: (($('#rule-focused') || {}).value || '').trim(),
+      matter: (($('#rule-matter') || {}).value || '').trim(),
+      task: (($('#rule-task') || {}).value || '').trim(),
+      priority: Number((($('#rule-priority') || {}).value || 100)) || 100,
+      enabled: true,
+    };
+  }
+
+  async function saveRule(rule, quiet) {
+    const res = await fetch('/api/rules', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rule),
+    });
+    const out = await res.json();
+    if (!out.ok) { toast('保存规则失败：' + (out.error || '')); return; }
+    renderRulesPanel(out.rules || []);
+    if (!quiet) {
+      toast('规则已保存，下次「重新处理」生效');
+      if (state.settingsData) state.settingsData.rules = out.rules;
+    }
+  }
+
+  async function deleteRule(id) {
+    if (!id) return;
+    if (!confirm('删除这条规则？已归类的时间线不会改变。')) return;
+    const res = await fetch('/api/rules/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const out = await res.json();
+    if (out.ok) renderRulesPanel(out.rules || []);
+  }
+
+  // ---------- sync ----------
+  const SYNC_CHANNELS = [
+    ['times', '时间段与应用名（必需）', '任何同步的基础，不能关闭'],
+    ['matters', '事项 / 任务名称与费率', '关掉后对方只看到时间，不知道你在做什么'],
+    ['window_titles', '窗口标题', '文件名的客户/项目名可能泄露给另一台设备'],
+    ['urls', '网页地址与页面标题', '内网地址、搜索关键词'],
+    ['page_text', '网页正文', '内容最敏感的一档'],
+    ['focused_text', '焦点输入框文本', 'Excel 单元格、邮件正文'],
+    ['clipboard', '剪贴板预览', '前 240 字'],
+  ];
+
+  function renderSyncPanel(sync) {
+    const channels = sync.channels || {};
+    const rows = SYNC_CHANNELS.map(([key, label, hint]) => {
+      const locked = key === 'times';
+      return '<label class="sync-channel"><input type="checkbox" id="sync-ch-' + key + '"'
+        + (channels[key] ? ' checked' : '') + (locked ? ' disabled' : '') + '>'
+        + '<span><b>' + label + '</b><i>' + hint + '</i></span></label>';
+    }).join('');
+    $('#syncBody').innerHTML =
+      '<div class="settings-group"><h4>多端同步（默认关闭）</h4>'
+      + '<div class="hint">同步包写到你自己选的文件夹（OneDrive / 坚果云 / U 盘），'
+      + '不经过任何服务器，也不联网。只有下面勾选的通道会离开本机；'
+      + '导入的数据单独存放（<code>foreign_days</code>），不会混进本机时间线。</div>'
+      + switchRow('sync-enabled', '启用多端同步', !!sync.enabled, false)
+      + '<div class="field-row"><label style="flex-direction:column;align-items:stretch">'
+      + '同步文件夹（绝对路径）'
+      + '<input id="sync-folder" value="' + esc(sync.folder || '')
+      + '" placeholder="D:\\OneDrive\\worktime-sync 或 \\\\nas\\share\\worktime"></label></div>'
+      + switchRow('sync-encrypt', '用口令加密同步包（推荐）', sync.encrypt !== false, false)
+      + '<div class="field-row"><label>口令（不写进配置，仅本次使用）'
+      + '<input id="sync-passphrase" type="password" autocomplete="off"'
+      + ' placeholder="留空 = 用环境变量 WT_SYNC_PASSPHRASE"></label></div>'
+      + '<div class="settings-group"><h4>允许离开本机的数据</h4>' + rows + '</div>'
+      + '<div class="actions"><button id="syncSave" class="btn primary">保存同步设置</button>'
+      + '<button id="syncPreview" class="btn ghost">预览会同步什么</button>'
+      + '<button id="syncPush" class="btn ghost">导出到文件夹</button>'
+      + '<button id="syncPull" class="btn ghost">从文件夹导入</button></div>'
+      + '<div id="syncStatus" class="hint"></div>'
+      + '<div id="syncPreviewOut" class="sync-preview"></div></div>';
+
+    $('#syncSave').onclick = saveSyncSettings;
+    $('#syncPreview').onclick = previewSync;
+    $('#syncPush').onclick = () => syncAction('push');
+    $('#syncPull').onclick = () => syncAction('pull');
+  }
+
+  function syncForm() {
+    const channels = {};
+    SYNC_CHANNELS.forEach(([key]) => {
+      const el = $('#sync-ch-' + key);
+      if (el) channels[key] = el.checked;
+    });
+    channels.times = true;
+    return {
+      enabled: $('#sync-enabled').checked,
+      folder: $('#sync-folder').value.trim(),
+      encrypt: $('#sync-encrypt').checked,
+      channels,
+      passphrase: ($('#sync-passphrase') || {}).value || '',
+    };
+  }
+
+  async function saveSyncSettings() {
+    const form = syncForm();
+    const res = await fetch('/api/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sync: {
+        enabled: form.enabled, folder: form.folder,
+        encrypt: form.encrypt, channels: form.channels,
+      } }),
+    });
+    const out = await res.json();
+    if (!out.ok) { toast('保存失败：' + (out.error || '')); return; }
+    toast(form.enabled ? '已开启同步（只同步勾选的通道）' : '已关闭同步');
+    await refreshSyncStatus();
+  }
+
+  async function refreshSyncStatus() {
+    if (!state.settingsTab || state.settingsTab !== 'sync') return;
+    try {
+      const res = await fetch('/api/sync/status');
+      const data = await res.json();
+      const el = $('#syncStatus');
+      if (el) {
+        el.innerHTML = '设备：' + esc(data.device.name || data.device.id || '—')
+          + ' · 本机近 7 天 ' + (data.local_days || 0) + ' 天'
+          + ' · 已导入 ' + (data.foreign_days || 0) + ' 天'
+          + (data.foreign_range && data.foreign_range.devices.length
+            ? '（' + esc(data.foreign_range.devices.join('、')) + '）' : '');
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  async function previewSync() {
+    const res = await fetch('/api/sync/preview?days=7');
+    const data = await res.json();
+    const channels = data.channels || {};
+    const rows = SYNC_CHANNELS.map(([key, label]) =>
+      '<div class="pv-row' + (channels[key] ? ' on' : '') + '">'
+      + '<span>' + (channels[key] ? '✓' : '·') + '</span>'
+      + '<span>' + label + '</span></div>').join('');
+    const samples = (data.samples || []).map((s) =>
+      '<div class="pv-sample">' + esc(s.day) + ' ' + esc(s.start) + ' · '
+      + esc(s.app) + ' · ' + esc(s.title || '') + ' · ' + esc(s.matter || '') + '</div>'
+    ).join('');
+    $('#syncPreviewOut').innerHTML =
+      '<div class="pv-head">最近 7 天将导出：<b>' + data.segments + '</b> 段 / '
+      + data.days + ' 天，约 ' + Math.ceil((data.bytes || 0) / 1024) + ' KB</div>'
+      + rows + (samples ? '<div class="pv-head">样例</div>' + samples : '');
+  }
+
+  async function syncAction(action) {
+    const form = syncForm();
+    const res = await fetch('/api/sync/' + action, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days: 7, passphrase: form.passphrase }),
+    });
+    const out = await res.json();
+    if (!out.ok) { toast('失败：' + (out.error || '未知错误')); return; }
+    if (action === 'push') {
+      toast('已导出到同步文件夹：' + (out.path || ''));
+    } else {
+      toast('已导入 ' + (out.days || 0) + ' 天 / ' + (out.files || 0) + ' 个文件');
+    }
+    await refreshSyncStatus();
+  }
+
+  // ---------- billing ----------
+  function renderBillingPanel(matters) {
+    state.matters = matters || [];
+    const rows = state.matters.map((matter, idx) =>
+      '<tr>'
+      + '<td>' + esc(matter.path) + '</td>'
+      + '<td><input type="number" min="0" step="10" class="rate-input" '
+      + 'data-rate-idx="' + idx + '" value="' + Number(matter.rate || 0) + '"></td>'
+      + '<td><input class="cur-input" data-cur-idx="' + idx + '" value="'
+      + esc(matter.currency || 'CNY') + '" size="4"></td>'
+      + '<td><input type="checkbox" data-bill-idx="' + idx + '"'
+      + (matter.billable ? ' checked' : '') + '></td>'
+      + '</tr>').join('');
+    $('#billingBody').innerHTML =
+      '<div class="settings-group"><h4>事项费率</h4>'
+      + '<div class="hint">路径用 <code>客户 / 项目 / 子任务</code> 分层，父级费率自动继承。'
+      + '只在本机保存；不会随同步默认外发（同步里「事项 / 费率」那一项可关）。</div>'
+      + (state.matters.length
+        ? '<table class="rule-table"><thead><tr><th>事项</th><th>每小时单价</th>'
+          + '<th>币种</th><th>计费</th></tr></thead><tbody>' + rows + '</tbody></table>'
+        : '<div class="hint">还没有事项费率。先在上方时间线里给事项打标签，'
+          + '再回来加单价。</div>')
+      + '<div class="rule-form" style="margin-top:10px">'
+      + '<label>新增事项<input id="rate-new-path" placeholder="客户A / 项目B"></label>'
+      + '<label>单价<input id="rate-new-rate" type="number" min="0" value="0"></label>'
+      + '<label>币种<input id="rate-new-cur" value="CNY"></label>'
+      + '</div>'
+      + '<div class="actions"><button id="ratesSave" class="btn primary">保存费率</button>'
+      + '<button id="invoicePreview" class="btn ghost">查看本月费用</button></div>'
+      + '<div id="invoiceOut" class="sync-preview"></div></div>';
+
+    $('#ratesSave').onclick = saveRates;
+    $('#invoicePreview').onclick = previewInvoice;
+  }
+
+  async function saveRates() {
+    const rows = Array.from($('#billingBody').querySelectorAll('[data-rate-idx]'));
+    for (const input of rows) {
+      const idx = Number(input.dataset.rateIdx);
+      const matter = state.matters[idx];
+      if (!matter) continue;
+      const rate = Number(input.value) || 0;
+      const cur = ($('#billingBody').querySelector('[data-cur-idx="' + idx + '"]') || {}).value;
+      const bill = ($('#billingBody').querySelector('[data-bill-idx="' + idx + '"]') || {}).checked;
+      await fetch('/api/matters', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: matter.path, rate, currency: cur || 'CNY',
+                               billable: bill ? 1 : 0 }),
+      });
+    }
+    const newPath = ($('#rate-new-path') || {}).value;
+    if (newPath && newPath.trim()) {
+      await fetch('/api/matters', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: newPath.trim(),
+                               rate: Number(($('#rate-new-rate') || {}).value) || 0,
+                               currency: (($('#rate-new-cur') || {}).value || 'CNY') }),
+      });
+    }
+    toast('费率已保存');
+    const res = await fetch('/api/settings');
+    const data = await res.json();
+    renderBillingPanel(data.matters || []);
+  }
+
+  async function previewInvoice() {
+    const res = await fetch('/api/invoice?date=' + encodeURIComponent(state.date)
+      + '&period=month');
+    const data = await res.json();
+    if (!data.rows || !data.rows.length) {
+      $('#invoiceOut').innerHTML = '<div class="hint">本月还没有计费数据。</div>';
+      return;
+    }
+    const rows = data.rows.map((row) =>
+      '<tr><td>' + esc(row.matter) + '</td><td>'
+      + (row.billable ? row.hours.toFixed(2) : '—') + '</td><td>'
+      + (row.billable ? row.amount.toFixed(2) : '—') + '</td><td>'
+      + (row.billable ? '计费' : '不计费') + '</td></tr>').join('');
+    $('#invoiceOut').innerHTML =
+      '<div class="pv-head">' + esc(data.start) + ' ~ ' + esc(data.end)
+      + '：<b>' + data.total_hours.toFixed(2) + '</b> 小时 / <b>'
+      + data.total_amount.toFixed(2) + '</b> ' + esc(data.currency) + '</div>'
+      + '<table class="rule-table"><thead><tr><th>事项</th><th>工时(h)</th>'
+      + '<th>金额</th><th>状态</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  // ---------- live status ----------
+  async function pollLive() {
+    try {
+      const res = await fetch('/api/live');
+      state.live = await res.json();
+    } catch (e) {
+      state.live = null;
+    }
+    renderLive();
+  }
+
+  function renderLive() {
+    const live = state.live || {};
+    const pill = $('#livePill');
+    const text = $('#liveText');
+    if (!pill || !text) return;
+    const paused = !!live.paused;
+    pill.classList.toggle('ok', !!live.alive && !paused);
+    pill.classList.toggle('warn', paused);
+    pill.classList.toggle('bad', !live.alive && !paused);
+    if (paused) {
+      text.textContent = '采集已暂停';
+    } else if (live.alive) {
+      text.textContent = '采集中 · ' + (live.age_s != null ? live.age_s + 's 前' : '');
+    } else {
+      text.textContent = '采集器未运行';
+    }
+    const btn = $('#btnPause');
+    if (btn) btn.textContent = paused ? '恢复采集' : '暂停采集';
+  }
+
+  async function togglePause() {
+    const paused = !(state.live && state.live.paused);
+    await fetch('/api/collector/pause', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paused }),
+    });
+    toast(paused ? '已暂停采集（正在跑的时间段不会丢）' : '已恢复采集');
+    await pollLive();
+  }
+
   // ---------- boot ----------
   (async function boot() {
     const params = new URLSearchParams(location.search);
@@ -1495,6 +1920,16 @@
     $('#date').value = localToday();
     bind();
     await load(params.get('date') || '');
+    await pollLive();
+    setInterval(pollLive, 10000);
+    // Live (today) view: refresh the timeline while the collector is running.
+    setInterval(() => {
+      if (!state.live || !state.live.alive || state.live.paused) return;
+      if (state.date !== localToday()) return;
+      if (!$('#settingsModal').classList.contains('hidden')) return;
+      if (drag) return;
+      load(state.date);
+    }, 60000);
     const openId = Number(params.get('open') || 0);
     if (openId) await openDrawer(openId);
     if (params.get('settings') === '1') await openSettings();

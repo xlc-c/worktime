@@ -109,4 +109,80 @@ def is_probably_sensitive(text: str) -> bool:
     # password-ish assignments
     if re.search(r"(?i)(password|passwd|pwd|secret|token|api[_-]?key)\s*[:=]\s*\S{6,}", text):
         return True
+    # JWT / bearer tokens
+    if re.search(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b", text):
+        return True
+    # AWS access key ids / long hex or base64 blobs with no spaces
+    if re.search(r"\bAKIA[0-9A-Z]{16}\b", text):
+        return True
+    for token in re.findall(r"[A-Za-z0-9+/=_-]{32,}", text):
+        if _entropy(token) >= 4.2 and _classes(token) >= 3:
+            return True
+    # payment card numbers (Luhn), with or without separators
+    for candidate in re.findall(r"\d(?:[ -]?\d){12,18}", text):
+        digits = re.sub(r"\D", "", candidate)
+        if 13 <= len(digits) <= 19 and _luhn(digits):
+            return True
+    # 18-digit national id numbers
+    if re.search(r"(?<!\d)\d{17}[\dXx](?!\d)", text):
+        return True
     return False
+
+
+def _entropy(token: str) -> float:
+    """Shannon entropy per character of a single token."""
+    import math
+
+    if not token:
+        return 0.0
+    counts: dict[str, int] = {}
+    for ch in token:
+        counts[ch] = counts.get(ch, 0) + 1
+    total = len(token)
+    return -sum((n / total) * math.log2(n / total) for n in counts.values())
+
+
+def _classes(token: str) -> int:
+    return sum((
+        any(c.islower() for c in token),
+        any(c.isupper() for c in token),
+        any(c.isdigit() for c in token),
+        any(not c.isalnum() for c in token),
+    ))
+
+
+def _luhn(digits: str) -> bool:
+    total = 0
+    for idx, ch in enumerate(reversed(digits)):
+        n = int(ch)
+        if idx % 2 == 1:
+            n *= 2
+            if n > 9:
+                n -= 9
+        total += n
+    return total % 10 == 0
+
+
+def is_high_entropy(text: str) -> bool:
+    """Looks like a random token/secret but is not matched by a known pattern.
+
+    Such content is still recorded as a copy event (hash + length), but the
+    preview is dropped so the text itself never reaches the database.
+    """
+    if not text:
+        return False
+    stripped = text.strip()
+    if not stripped or re.search(r"\s", stripped):
+        return False
+    if len(stripped) < 20:
+        return False
+    return _entropy(stripped) >= 4.0 and _classes(stripped) >= 2
+
+
+def clip_preview_safe(text: str, limit: int) -> tuple[str, bool]:
+    """Return (preview, redacted). Sensitive/random content is not stored."""
+    if is_probably_sensitive(text):
+        return "", True
+    if is_high_entropy(text):
+        return "", True
+    return clip_preview(text, limit), False
