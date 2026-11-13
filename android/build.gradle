@@ -1,0 +1,5 @@
+// Top-level build file. No external plugins, no AndroidX: the app only needs
+// framework APIs, which keeps the APK small and the build robust.
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}

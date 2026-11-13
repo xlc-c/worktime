@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 from .billing import write_invoice
 from .config import data_paths, load_config
+from .importers import RawFormatError, import_file as import_raw_file
 from .pipeline import process_date
 from .report import write_period_report, write_report
 from .rules import preview_rule
@@ -290,6 +291,30 @@ def cmd_live(args) -> int:
     return 0
 
 
+def cmd_import_raw(args) -> int:
+    """Import a worktime-raw export (e.g. from the Android app)."""
+    cfg = load_config()
+    store = _store(cfg)
+    try:
+        result = import_raw_file(
+            store, args.file, replace=not args.keep,
+            progress=lambda day, a, f: print(f"  {day}: activity={a} focus={f}"),
+        )
+    except RawFormatError as exc:
+        print("导入失败:", exc)
+        store.close()
+        return 1
+    print(
+        f"已导入 {result['days']} 天 / {result['activity']} 条活动 / "
+        f"{result['focus']} 条焦点记录"
+    )
+    if result["skipped"]:
+        print("跳过（无数据）:", ", ".join(result["skipped"]))
+    print("下一步：wt process --date <那一天>  生成时间线")
+    store.close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="worktime", description="本地工作时间线")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -374,6 +399,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--file", help="要导入的 .wtb 文件")
     p.add_argument("--passphrase", help="加密口令（也可用环境变量 WT_SYNC_PASSPHRASE）")
     p.set_defaults(func=cmd_sync)
+
+    p = sub.add_parser("import-raw",
+                       help="导入其他平台导出的原始事件（worktime-raw JSON）")
+    p.add_argument("--file", required=True, help="worktime-raw JSON 路径")
+    p.add_argument("--keep", action="store_true",
+                   help="保留该天已有原始事件（默认先清空再导入）")
+    p.set_defaults(func=cmd_import_raw)
     return parser
 
 

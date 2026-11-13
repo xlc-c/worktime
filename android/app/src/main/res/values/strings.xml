@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WorkTime</string>
+    <string name="pause">暂停采集</string>
+    <string name="grant">授予使用情况访问</string>
+    <string name="export">导出并复制</string>
+    <string name="share">分享导出</string>
+    <string name="footnote">只记录前台应用与时长，不截屏、不读输入内容、不联网。导出后在电脑上运行 wt import-raw 生成时间线。</string>
+</resources>

@@ -476,6 +476,28 @@ class Store:
     def processed(self, date: str) -> bool:
         return bool(self._query("SELECT 1 FROM processed_days WHERE date = ?", (date,)))
 
+    def delete_raw_day(self, date: str) -> None:
+        """Drop captured events for one day, keeping processed segments.
+
+        Used when re-importing an export from another device (the phone may
+        export the same day twice with more events).
+        """
+        start, end = date + "T00:00:00", date + "T23:59:59"
+        with self._lock:
+            for table in ("raw_activity", "web_events", "clipboard_events",
+                          "focus_events"):
+                self._conn.execute(
+                    f"DELETE FROM {table} WHERE ts >= ? AND ts <= ?", (start, end)
+                )
+            self._conn.commit()
+
+    def count_raw_day(self, date: str) -> int:
+        rows = self._query(
+            "SELECT COUNT(*) AS n FROM raw_activity WHERE ts >= ? AND ts <= ?",
+            (date + "T00:00:00", date + "T23:59:59"),
+        )
+        return int(rows[0]["n"]) if rows else 0
+
     def list_dates(self, limit: int = 30) -> list[dict]:
         rows = self._query(
             "SELECT date, COUNT(*) AS n, SUM(duration_s) AS seconds FROM segments"

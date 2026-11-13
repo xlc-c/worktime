@@ -7,7 +7,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0b6cbd)](#requirements)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-64%20passing-2ea44f)](#tests)
+[![Tests](https://img.shields.io/badge/tests-68%20passing-2ea44f)](#tests)
 [![No network](https://img.shields.io/badge/network-127.0.0.1%20only-4f46e5)](#privacy-by-design)
 
 ![WorkTime timeline](docs/screenshots/full.png)
@@ -90,6 +90,28 @@ your company’s data policy. See [`docs/privacy.md`](docs/privacy.md) and
 
 > The ZIP is unsigned. Verify the SHA-256 shown in the release notes before running.
 
+## Android (preview)
+
+Same idea, phone-first capture: `UsageStatsManager` records foreground apps and
+durations (no root, no accessibility service), the phone shows today's per-app
+time and exports a `worktime-raw` JSON. The desktop pipeline imports it and
+produces the same timeline, rules and reports.
+
+```bat
+:: after exporting from the phone (share / clipboard / file)
+wt import-raw --file worktime-raw-2026-11-13.json
+wt process --date 2026-11-13
+wt report --date 2026-11-13
+```
+
+Build the APK: `.github/workflows/android.yml` builds on every push under
+`android/` and attaches the debug APK to the `android-v0.1.0` release.
+Locally: `cd android && gradle assembleDebug`.
+
+Platform matrix and the `worktime-raw` contract: [docs/PLATFORMS.md](docs/PLATFORMS.md)
+(Windows ✅, macOS planned, Android ✅, HarmonyOS 4.x runs the APK, HarmonyOS NEXT
+needs a separate ArkTS client).
+
 ## Build from source (developers)
 
 ```bat
@@ -112,7 +134,7 @@ powershell -ExecutionPolicy Bypass -File scripts\package-portable.ps1 `
 run-tests.bat
 ```
 
-64 unit/end-to-end tests: segmentation rules, clipboard glue, aliasing, clustering, auto-rules,
+68 unit/end-to-end tests: segmentation rules, clipboard glue, aliasing, clustering, auto-rules,
 reports, billing/invoices, sync channel filtering + encryption + import idempotency, privacy
 heuristics and capture-policy presets.
 

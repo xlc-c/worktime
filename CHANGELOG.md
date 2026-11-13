@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.2.1 — 2026-11-13
+
+Cross-platform groundwork: the capture layer is now per-OS and everything else
+stays shared.
+
+### Added
+
+- **`worktime-raw` v1 contract** (`wt/importers.py`, `docs/PLATFORMS.md`): any
+  platform's collector can export raw activity and the desktop runs the same
+  segmentation/rules/reports. CLI: `wt import-raw --file raw.json`
+  (`--keep` appends instead of replacing a day).
+- **Android app v0.1** (`android/`, Java, framework APIs only): UsageStats capture
+  (no root, no accessibility), foreground service, today's per-app usage,
+  pause/resume, `worktime-raw` export via share sheet or clipboard.
+- **CI**: `.github/workflows/android.yml` builds the debug APK on every push
+  under `android/`, attaches it to the `android-v0.1.0` prerelease, and posts the
+  Gradle log to a public issue when the build fails.
+
+### Fixed
+
+- `Store.delete_raw_day()` / `count_raw_day()` for safe re-imports of the same day.
+
 ## v0.2.0 — 2026-11-13
 
 Focus: make the timeline trustworthy without a babysitter — rules instead of
