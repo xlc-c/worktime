@@ -47,11 +47,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=android/app/build/outputs/apk/debug/app-debug.apk
+          cp "$APK" /tmp/WorkTime-android-0.1.0-debug.apk
           gh release view android-v0.1.0 >/dev/null 2>&1 || \
             gh release create android-v0.1.0 \
               --title "Android v0.1.0 — 采集 + 今日用量 + 导出" \
               --notes-file android/RELEASE.md --prerelease
-          gh release upload android-v0.1.0 "$APK#WorkTime-android-0.1.0-debug.apk" --clobber
+          gh release upload android-v0.1.0 /tmp/WorkTime-android-0.1.0-debug.apk --clobber
 
       - name: Publish build log on failure
         if: failure()
